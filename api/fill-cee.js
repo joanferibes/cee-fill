@@ -6,10 +6,10 @@ export default async function handler(req, res) {
   try {
     const { tipo, datos } = req.body;
 
-    // Mapear tipos a archivos PDF
+    // Mapa de rutas correctas en la carpeta /public/assets
     const rutas = {
-      acta: "public/assets/Acta de visita.pdf",
       delegacion: "public/assets/Modelo_delegacion_tramite_registro.pdf",
+      acta: "public/assets/Acta de visita.pdf",
     };
 
     const relativa = rutas[tipo];
@@ -17,36 +17,39 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Tipo de documento no válido" });
     }
 
-    // Construir ruta absoluta
+    // Construimos ruta absoluta desde el directorio del proyecto
     const pdfPath = path.join(process.cwd(), relativa);
 
-    // Leer el PDF
+    // Lee el PDF
     const existingPdfBytes = fs.readFileSync(pdfPath);
 
-    // Cargar el PDF con pdf-lib
+    // Carga el PDF con pdf-lib
     const pdfDoc = await PDFDocument.load(existingPdfBytes);
     const form = pdfDoc.getForm();
 
-    // Rellenar los campos
+    // Escribe campos recibidos
     Object.entries(datos || {}).forEach(([campo, valor]) => {
       try {
         form.getTextField(campo).setText(String(valor ?? ""));
       } catch (e) {
-        console.warn("Campo no encontrado:", campo);
+        // Si algún campo no existe, lo ignoramos.
       }
     });
 
-    // Guardar el PDF resultante
+    // Devuelve el PDF
     const filledPdfBytes = await pdfDoc.save();
-
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename="${tipo}_relleno.pdf"`
+      `attachment; filename="${tipo}_rellena.pdf"`
     );
     return res.end(Buffer.from(filledPdfBytes));
+
   } catch (e) {
     console.error(e);
-    return res.status(500).json({ error: "Error al procesar el PDF", detalle: e.message });
+    return res.status(500).json({
+      error: "Error al procesar el PDF",
+      detalle: e.message,
+    });
   }
 }
