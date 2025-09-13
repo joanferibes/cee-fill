@@ -1,63 +1,63 @@
-import fs from "fs";
-import path from "path";
+// api/fill-cee.js
 import { PDFDocument } from "pdf-lib";
 
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
+      res.setHeader("Allow", ["POST"]);
       return res.status(405).json({ error: "Método no permitido" });
     }
 
     const { tipo, datos } = req.body || {};
     if (!tipo || typeof datos !== "object") {
-      return res.status(400).json({ error: "Faltan 'tipo' o 'datos' en el cuerpo" });
+      return res.status(400).json({ error: "Debes enviar 'tipo' y 'datos'." });
     }
 
-    // Rutas de plantillas
-    let pdfPath;
+    // Construir URL base segura (funciona en Vercel y en local)
+    const host = req.headers["x-forwarded-host"] || req.headers.host;
+    const proto = req.headers["x-forwarded-proto"] || "https";
+    const baseUrl = `${proto}://${host}`;
+
+    // Elegir la plantilla PDF por URL pública
+    let pdfUrl;
     if (tipo === "delegacion") {
-      pdfPath = path.join(process.cwd(), "public/assets/Modelo_delegacion_tramite_registro.pdf");
+      pdfUrl = `${baseUrl}/assets/Modelo_delegacion_tramite_registro.pdf`;
     } else if (tipo === "acta") {
-      pdfPath = path.join(process.cwd(), "public/assets/Acta de visita.pdf");
+      // El espacio debe ir codificado como %20
+      pdfUrl = `${baseUrl}/assets/Acta%20de%20visita.pdf`;
     } else {
       return res.status(400).json({ error: "Tipo de documento no válido" });
     }
 
-    // Cargar PDF base
-    const existingPdfBytes = fs.readFileSync(pdfPath);
+    // Descargar la plantilla desde /assets (sin usar fs)
+    const resp = await fetch(pdfUrl);
+    if (!resp.ok) {
+      return res
+        .status(404)
+        .json({ error: "No se pudo descargar la plantilla", pdfUrl, status: resp.status });
+    }
+    const existingPdfBytes = await resp.arrayBuffer();
+
+    // Cargar y rellenar
     const pdfDoc = await PDFDocument.load(existingPdfBytes);
     const form = pdfDoc.getForm();
 
-    // --- Relleno SEGURO: no fallar si un campo no existe ---
-    for (const [campo, valor] of Object.entries(datos || {})) {
-      const v = valor ?? "";
-      let rellenado = false;
-
-      // Intentar como campo de texto
-      try {
-        const tf = form.getTextField(campo);
-        tf.setText(String(v));
-        rellenado = true;
-      } catch (_) {}
-
-      // Intentar como desplegable si no era textfield
-      if (!rellenado) {
-        try {
-          const dd = form.getDropdown(campo);
-          dd.select(String(v));
-          rellenado = true;
-        } catch (_) {}
-      }
-
-      // Si no existe, lo ignoramos silenciosamente
+    // Relleno SEGURO: si un campo no existe, lo ignoramos y seguimos
+    for (const [campo, valor] of Object.entries(datos)) {
+      const v = valor == null ? "" : String(valor);
+      let ok = false;
+      try { form.getTextField(campo).setText(v); ok = true; } catch {}
+      if (!ok) { try { form.getDropdown(campo).select(v); ok = true; } catch {} }
+      if (!ok) { try { form.getCheckBox(campo).check(); ok = true; } catch {} }
+      // si no existe, lo ignoramos
     }
 
     const pdfBytes = await pdfDoc.save();
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename=${tipo}.pdf`);
     return res.send(Buffer.from(pdfBytes));
-  } catch (error) {
-    console.error("Fallo al generar PDF:", error);
-    return res.status(500).json({ error: "Error al procesar el PDF" });
+  } catch (e) {
+    console.error("Fallo al generar PDF:", e);
+    return res.status(500).json({ error: "Error al procesar el PDF", detalle: e.message });
   }
 }
